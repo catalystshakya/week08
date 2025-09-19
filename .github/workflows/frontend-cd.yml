@@ -171,3 +171,4 @@ jobs:
 
       - name: Logout from Azure (AKS deployment)
         run: az logout
+#

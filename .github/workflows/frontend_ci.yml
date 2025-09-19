@@ -15,7 +15,7 @@ on:
   #    - 'frontend/**'
  #     - '.github/workflows/frontend_ci.yml' # Trigger if this workflow file changes
 
- #===== NEW TRIGGER (SOLUTION FOR ISSUE 1) =====
+ #===== NEW TRIGGER (SOLUTION FOR ISSUE 1) ====
   pull_request:
     branches: [ main, dev ]
     paths:
