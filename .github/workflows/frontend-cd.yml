@@ -151,8 +151,8 @@ jobs:
       #- name: Set Kubernetes context (get AKS credentials)
       #  uses: azure/aks-set-context@v3
       #  with:
-      #    resource-group: ${{ inputs.aks_resource_group }}
-       #   cluster-name: ${{ inputs.aks_cluster_name }}
+      #    resource-group: ${{ inputs.aks_resource_group 
+       #   cluster-name: $ inputs.aks_cluster_name }}
 
         # ===== NEW: Using secrets for AKS context =====
       - name: Set Kubernetes context (get AKS credentials)
