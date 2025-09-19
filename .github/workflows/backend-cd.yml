@@ -1,23 +1,45 @@
 name: CD - Deploy Backend Services to AKS
 
+# ===== OLD TRIGGER =====
+#on:
+  #workflow_dispatch:
+   # inputs:
+    #  aks_cluster_name:
+     #   description: 'Name of the AKS Cluster to deploy to'
+      #  required: true
+       # default: '<aks_cluster_name>'
+      #aks_resource_group:
+       # description: 'Resource Group of the AKS Cluster'
+        #required: true
+        #default: '<resource_group_name>'
+      #aks_acr_name:
+       # description: 'Name of ACR'
+        #required: true
+        #default: '<acr_name>'
+
+
+       # ===== NEW TRIGGER (SOLUTION FOR ISSUE 2) =====
 on:
-  workflow_dispatch:
-    inputs:
-      aks_cluster_name:
-        description: 'Name of the AKS Cluster to deploy to'
-        required: true
-        default: '<aks_cluster_name>'
-      aks_resource_group:
-        description: 'Resource Group of the AKS Cluster'
-        required: true
-        default: '<resource_group_name>'
-      aks_acr_name:
-        description: 'Name of ACR'
-        required: true
-        default: '<acr_name>'
+  # linking to CI :To trigger this CD workflow AFTER the CI workflow finishes
+  workflow_run:
+    # Name of the CI workflow that must finish first
+    workflows: ["Backend CI - Test, Build and Push Images to ACR"]
+    # Only trigger when that workflow completes 
+    types:
+      - completed
+    # Only trigger if the CI workflow ran on the main branch
+    branches:
+      - main # Only automatically deploy to production when the changes have been thoroughly tested and successfully merged into the main branch
+
+  # Keep manual trigger for emergencies or one-off deployments
+  workflow_dispatch: 
 
 jobs:
   deploy_backend:
+    # CRITICAL: Only run this job if the CI workflow was SUCCESSFUL
+    # This prevents auto-deploying if tests failed
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
     runs-on: ubuntu-latest
     environment: Production
     
@@ -35,14 +57,28 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
           enable-AzPSSession: true
 
+
+     # ===== OLD: Using manual inputs commented out=====
+
+     # - name: Set Kubernetes context (get AKS credentials)
+     #   run: |
+     #     az aks get-credentials --resource-group ${{ github.event.inputs.aks_resource_group }} --name ${{ github.event.inputs.aks_cluster_name }} --overwrite-existing
+
+    #  - name: Attach ACR
+    #    run: |
+      #    az aks update --name  ${{ github.event.inputs.aks_cluster_name }} --resource-group ${{ github.event.inputs.aks_resource_group }} --attach-acr ${{ github.event.inputs.aks_acr_name }}
+
+      
+# ===== NEW: Using secrets for automation =====
       - name: Set Kubernetes context (get AKS credentials)
         run: |
-          az aks get-credentials --resource-group ${{ github.event.inputs.aks_resource_group }} --name ${{ github.event.inputs.aks_cluster_name }} --overwrite-existing
+          az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME }} --overwrite-existing
 
       - name: Attach ACR
         run: |
-          az aks update --name ${{ github.event.inputs.aks_cluster_name }} --resource-group ${{ github.event.inputs.aks_resource_group }} --attach-acr ${{ github.event.inputs.aks_acr_name }}
+          az aks update --name ${{ secrets.AKS_CLUSTER_NAME }} --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} --attach-acr ${{ secrets.AZURE_CONTAINER_REGISTRY }}
 
+     
       - name: Deploy Backend Infrastructure (Namespace, ConfigMaps, Secrets, Databases)
         run: |
           echo "Deploying backend infrastructure..."
@@ -96,6 +132,27 @@ jobs:
       - name: Capture Order Service IP for Workflow Output
         id: get_order_ip
         run: echo "external_ip=${{ env.ORDER_IP }}" >> $GITHUB_OUTPUT
+
+
+         # ===== NEW STEPS: Create and upload IP files as an artifact =====
+      - name: Create IP files for artifact
+        run: |
+           echo "${{ env.PRODUCT_IP }}" > product-ip.txt
+            echo "${{ env.ORDER_IP }}" > order-ip.txt
+            echo "IP addresses stored for frontend deployment:"
+            cat product-ip.txt
+            cat order-ip.txt
+
+      - name: Upload Backend IPs as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-ips
+          retention-days: 1
+          path: |
+            product-ip.txt
+            order-ip.txt
+
+        
 
       - name: Logout from Azure
         run: az logout

@@ -4,43 +4,61 @@ name: CD - Deploy Frontend to AKS
 
 # This workflow can be called by other workflows and takes inputs.
 # Or it can be run manually if you provide the IPs.
-on:
-  workflow_dispatch:
-    inputs:
-      product_api_ip:
-        description: 'External IP of Product Service'
-        required: true
-        default: 'http://<ip_address>:8000'
-      order_api_ip:
-        description: 'External IP of Order Service (e.g., http://Y.Y.Y.Y:8001)'
-        required: true
-        default: 'http://<ip_address>:8001'
-      aks_cluster_name:
-        description: 'Name of the AKS Cluster to deploy to'
-        required: true
-        default: '<aks_name>'
-      aks_resource_group:
-        description: 'Resource Group of the AKS Cluster'
-        required: true
-        default: '<<resource_group_name>'
 
-  workflow_call:
-    inputs:
-      product_api_ip:
-        required: true
-        type: string
-      order_api_ip:
-        required: true
-        type: string
-      aks_cluster_name:
-        required: true
-        type: string
-      aks_resource_group:
-        required: true
-        type: string
+# ===== OLD TRIGGER =====
+#on:
+ # workflow_dispatch:
+ #   inputs:
+  #    product_api_ip:
+  #      description: 'External IP of Product Service'
+  #      required: true
+  #      default: 'http://<ip_address>:8000'
+   #   order_api_ip:
+   #     description: 'External IP of Order Service (e.g., http://Y.Y.Y.Y:8001)'
+    #    required: true
+   #     default: 'http://<ip_address>:8001'
+   #   aks_cluster_name:
+   #     description: 'Name of the AKS Cluster to deploy to'
+   #     required: true
+   #     default: '<aks_name>'
+   #   aks_resource_group:
+   #     description: 'Resource Group of the AKS Cluster'
+  #      required: true
+   #     default: '<<resource_group_name>'
+ # workflow_call:
+ #   inputs:
+ #     product_api_ip:
+  #      required: true
+   #     type: string
+    #  order_api_ip:
+     #   required: true
+      #  type: string
+     # aks_cluster_name:
+      #  required: true
+      #  type: string
+     # aks_resource_group:
+     #   required: true
+     #   type: string
+
+
+        
+   # ===== NEW TRIGGER (SOLUTION FOR ISSUE 2) =====
+on:
+  # This creates the second link: Trigger after the backend is successfully deployed
+  workflow_run:
+    workflows: ["CD - Deploy Backend Services to AKS"]
+    types:
+      - completed
+    branches:
+      - main
+
+  workflow_dispatch:
 
 jobs:
   deploy_frontend:
+    # CRITICAL: Only deploy the frontend if the backend deployment was SUCCESSFUL
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    
     runs-on: ubuntu-latest
     environment: Production
 
@@ -58,30 +76,92 @@ jobs:
       - name: Login to Azure Container Registry
         run: az acr login --name ${{ secrets.AZURE_CONTAINER_REGISTRY }}
 
+ # ===== OLD: Using manual inputs from workflow_dispatch =====
+
+      #- name: Inject Backend IPs into Frontend main.js
+      #  run: |
+      #    echo "Injecting IPs into frontend/static/js/main.js"
+      #    # Ensure frontend/main.js is directly in the path for sed
+      #    sed -i "s|_PRODUCT_API_URL_|${{ inputs.product_api_ip }}|g" frontend/main.js
+      #    sed -i "s|_ORDER_API_URL_|${{ inputs.order_api_ip }}|g" frontend/main.js
+          
+     # Display the modified file content for debugging
+       #   echo "--- Modified main.js content ---"
+        #  cat frontend/main.js
+        #  echo "---------------------------------"
+
+    # ===== NEW STEPS: Download and read the IPs from the backend-cd artifact =====
+
+      - name: Download backend IP artifact
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Script to find and download the artifact named 'backend-ips'
+            let allArtifacts = await github.rest.actions.listWorkflowRunArtifacts({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               run_id: ${{ github.event.workflow_run.id }},
+            });
+            let matchArtifact = allArtifacts.data.artifacts.find((artifact) => {
+              return artifact.name == "backend-ips"
+            });
+            let download = await github.rest.actions.downloadArtifact({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               artifact_id: matchArtifact.id,
+               archive_format: 'zip',
+            });
+            // Write the downloaded zip file to the runner's filesystem
+            let fs = require('fs');
+            fs.writeFileSync('${{ github.workspace }}/backend-ips.zip', Buffer.from(download.data));
+
+      - name: Unzip backend IP data
+        run: unzip backend-ips.zip -d backend-ips-data/
+
+      - name: Read Product Service IP
+        id: product_ip
+        run: echo "ip=$(cat backend-ips-data/product-ip.txt)" >> $GITHUB_OUTPUT
+
+      - name: Read Order Service IP
+        id: order_ip
+        run: echo "ip=$(cat backend-ips-data/order-ip.txt)" >> $GITHUB_OUTPUT
+  
       - name: Inject Backend IPs into Frontend main.js
         run: |
           echo "Injecting IPs into frontend/static/js/main.js"
-          # Ensure frontend/main.js is directly in the path for sed
-          sed -i "s|_PRODUCT_API_URL_|${{ inputs.product_api_ip }}|g" frontend/main.js
-          sed -i "s|_ORDER_API_URL_|${{ inputs.order_api_ip }}|g" frontend/main.js
-          
-          # Display the modified file content for debugging
+          echo "Product IP: ${{ steps.product_ip.outputs.ip }}"
+          echo "Order IP: ${{ steps.order_ip.outputs.ip }}"
+          # Use the IPs obtained from the previous steps
+          sed -i "s|_PRODUCT_API_URL_|http://${{ steps.product_ip.outputs.ip }}:8000|g" frontend/main.js
+          sed -i "s|_ORDER_API_URL_|http://${{ steps.order_ip.outputs.ip }}:8001|g" frontend/main.js
           echo "--- Modified main.js content ---"
           cat frontend/main.js
           echo "---------------------------------"
 
+      # =====  =====
+      
       # Build and Push Docker image for Frontend
       - name: Build and Push Frontend Image
         run: |
           docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}/frontend:latest ./frontend/
           docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}/frontend:latest
 
+       # ===== OLD: Using manual inputs for AKS context =====
+
+      #- name: Set Kubernetes context (get AKS credentials)
+      #  uses: azure/aks-set-context@v3
+      #  with:
+      #    resource-group: ${{ inputs.aks_resource_group }}
+       #   cluster-name: ${{ inputs.aks_cluster_name }}
+
+        # ===== NEW: Using secrets for AKS context =====
       - name: Set Kubernetes context (get AKS credentials)
         uses: azure/aks-set-context@v3
         with:
-          resource-group: ${{ inputs.aks_resource_group }}
-          cluster-name: ${{ inputs.aks_cluster_name }}
+          resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
+          cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
 
+        
       - name: Deploy Frontend to AKS
         run: |
           echo "Deploying frontend with latest tag to AKS cluster: ${{ inputs.aks_cluster_name }}"
